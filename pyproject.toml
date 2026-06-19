@@ -1,0 +1,23 @@
+[project]
+name = "colink-ws-debugger"
+version = "0.1.0"
+description = "PySide6 WebSocket debugger with temporary CoLink LAN identity support"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.8.0",
+    "cryptography>=42.0.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+colink-ws-debugger = "colink_ws_debugger.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
