@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -763,6 +764,7 @@ class MainWindow(QMainWindow):
         return True
 
     def add_record(self, direction: str, kind: str, payload: Any) -> None:
+        selected_rows = {index.row() for index in self.message_table.selectedIndexes()}
         summary, raw, parsed = parse_frame(kind, payload, format_json_raw=direction == "in")
         decrypted = ""
         if isinstance(payload, str):
@@ -784,9 +786,14 @@ class MainWindow(QMainWindow):
         self.records.append(record)
         row = self.message_table.rowCount()
         self.message_table.insertRow(row)
+        foreground = QColor("#b00020") if direction == "error" else None
         for column, value in enumerate([record.at, record.direction, record.kind, record.summary]):
-            self.message_table.setItem(row, column, QTableWidgetItem(value))
-        self.message_table.selectRow(row)
+            item = QTableWidgetItem(value)
+            if foreground is not None:
+                item.setForeground(foreground)
+            self.message_table.setItem(row, column, item)
+        if not selected_rows:
+            self.message_table.selectRow(row)
 
     @Slot()
     def show_selected_message(self) -> None:
