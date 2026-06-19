@@ -211,6 +211,8 @@ class LanProtocolSession:
             return
         if message_type == "business.v1.key-exchange":
             self.peer.ephemeral_public_key = str(payload.get("ephemeralPublicKey") or "")
+            self.session_key = None
+            self.encryption_counter = 0
             return
         if message_type == "business.v1.negotiate":
             supported = payload.get("supported")
@@ -397,6 +399,8 @@ class LanProtocolSession:
 
     def business_key_exchange(self) -> dict[str, Any]:
         self.local_ephemeral_private = X25519PrivateKey.generate()
+        self.session_key = None
+        self.encryption_counter = 0
         public = self.local_ephemeral_private.public_key().public_bytes(
             Encoding.Raw,
             PublicFormat.Raw,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -112,6 +113,7 @@ class SwimManager(QObject):
     def start(self, websocket_url: str) -> None:
         self.target_url = websocket_url
         self.running = True
+        logging.info("swim starting target=%s", websocket_url)
         self.ensure_server()
         self.bootstrap_ping()
         if not self.timer.isActive():
@@ -120,6 +122,7 @@ class SwimManager(QObject):
     def stop(self) -> None:
         self.running = False
         self.timer.stop()
+        logging.info("swim stopping")
         if self.server is not None:
             self.server.shutdown()
             self.server.server_close()
@@ -134,12 +137,14 @@ class SwimManager(QObject):
         try:
             server = SwimHttpServer(("0.0.0.0", LAN_PORT), SwimRequestHandler)
         except OSError as exc:
+            logging.warning("swim listen failed: %s", exc)
             self.status_changed.emit(f"SWIM listen failed: {exc}")
             return
         server.state = self.state
         self.server = server
         self.thread = threading.Thread(target=server.serve_forever, daemon=True)
         self.thread.start()
+        logging.info("swim listening port=%s", LAN_PORT)
         self.status_changed.emit(f"SWIM listening on {LAN_PORT}")
 
     @Slot()
@@ -151,6 +156,7 @@ class SwimManager(QObject):
             return
         port = parsed.port or LAN_PORT
         url = f"http://{parsed.hostname}:{port}/peer/swim/v1"
+        logging.debug("swim bootstrap ping url=%s", url)
         body = json.dumps(self.state.ping(), separators=(",", ":")).encode("utf-8")
         request = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
         threading.Thread(target=self._post_ping, args=(request,), daemon=True).start()
@@ -161,6 +167,8 @@ class SwimManager(QObject):
                 data = json.loads(response.read().decode("utf-8"))
             if isinstance(data, dict):
                 self.state.ingest(data)
+            logging.info("swim ping succeeded")
             self.status_changed.emit("SWIM alive")
         except Exception as exc:
+            logging.warning("swim ping failed: %s", exc)
             self.status_changed.emit(f"SWIM failed: {exc}")

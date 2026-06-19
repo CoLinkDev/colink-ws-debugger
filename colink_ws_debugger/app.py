@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +35,7 @@ from colink_ws_debugger.protocol import (
     pretty_json,
 )
 from colink_ws_debugger.identity_store import load_or_create_identity, regenerate_identity
+from colink_ws_debugger.logging_config import configure_logging
 from colink_ws_debugger.swim import SwimManager
 from colink_ws_debugger.trust_store import (
     load_trust_store,
@@ -78,6 +80,7 @@ class MainWindow(QMainWindow):
         self.client = WebSocketClient()
         self.swim = SwimManager(self.identity.device_id)
         self.trusted_peers = load_trust_store()
+        self.connection_generation = 0
         self.records: list[MessageRecord] = []
         self.ws_connected = False
         self.ping_timer = QTimer(self)
@@ -106,12 +109,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CoLink WebSocket Debugger")
         self.resize(1280, 820)
 
-        self.client.connected.connect(self.on_connected)
-        self.client.disconnected.connect(self.on_disconnected)
-        self.client.received.connect(self.on_received)
-        self.client.sent.connect(self.on_sent)
-        self.client.error.connect(self.on_error)
+        self.client.connected_for.connect(self.on_connected)
+        self.client.disconnected_for.connect(self.on_disconnected)
+        self.client.received_for.connect(self.on_received)
+        self.client.sent_for.connect(self.on_sent)
+        self.client.error_for.connect(self.on_error)
         self.swim.status_changed.connect(self.on_swim_status)
+        logging.info("identity device_id=%s", self.identity.device_id)
 
         self.build_ui()
         self.refresh_identity()
@@ -380,6 +384,8 @@ class MainWindow(QMainWindow):
         self.reset_protocol_state()
         self.swim.start(url)
         self.client.connect_url(url)
+        logging.info("connecting websocket url=%s generation=%s", url, self.client.generation)
+        self.connection_generation = self.client.generation
         self.status_label.setText("Connecting...")
         self.connect_button.setEnabled(False)
 
@@ -387,10 +393,14 @@ class MainWindow(QMainWindow):
     def disconnect_ws(self) -> None:
         self.swim.stop()
         self.client.disconnect()
+        logging.info("disconnect requested")
 
     @Slot()
-    def on_connected(self) -> None:
+    def on_connected(self, generation: int) -> None:
+        if generation != self.connection_generation:
+            return
         self.ws_connected = True
+        logging.info("websocket connected generation=%s", generation)
         self.status_label.setText("Connected")
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(True)
@@ -398,8 +408,11 @@ class MainWindow(QMainWindow):
             self.ping_timer.start()
 
     @Slot(str)
-    def on_disconnected(self, reason: str) -> None:
+    def on_disconnected(self, generation: int, reason: str) -> None:
+        if generation != self.connection_generation:
+            return
         self.ws_connected = False
+        logging.info("websocket disconnected generation=%s reason=%s", generation, reason)
         self.ping_timer.stop()
         self.status_label.setText("Disconnected")
         self.connect_button.setEnabled(True)
@@ -409,16 +422,22 @@ class MainWindow(QMainWindow):
         self.refresh_state()
 
     @Slot(str)
-    def on_error(self, message: str) -> None:
+    def on_error(self, generation: int, message: str) -> None:
+        if generation != self.connection_generation:
+            return
         self.add_record("error", "text", message)
         self.status_label.setText("Error")
+        logging.error("websocket error generation=%s message=%s", generation, message)
 
     @Slot(str)
     def on_swim_status(self, message: str) -> None:
         self.status_label.setText(message)
+        logging.info("swim status: %s", message)
 
     @Slot(str, object)
-    def on_received(self, kind: str, payload: object) -> None:
+    def on_received(self, generation: int, kind: str, payload: object) -> None:
+        if generation != self.connection_generation:
+            return
         message = None
         if isinstance(payload, str):
             try:
@@ -433,7 +452,9 @@ class MainWindow(QMainWindow):
         self.refresh_state()
 
     @Slot(str, object)
-    def on_sent(self, kind: str, payload: object) -> None:
+    def on_sent(self, generation: int, kind: str, payload: object) -> None:
+        if generation != self.connection_generation:
+            return
         if isinstance(payload, str):
             try:
                 self.note_outbound_message(json.loads(payload))
@@ -516,6 +537,7 @@ class MainWindow(QMainWindow):
 
     def send_protocol_message(self, message: dict[str, Any]) -> None:
         self.note_outbound_message(message)
+        logging.debug("sending protocol message type=%s", message.get("type"))
         self.client.send_text(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
         self.refresh_state()
 
@@ -792,6 +814,7 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    configure_logging()
     qt_app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

@@ -129,3 +129,28 @@ def test_music_template_encrypts_inner_payload():
 
     assert encrypted["type"] == "business.v1.message"
     assert second.decrypt_business_payload(encrypted["payload"])["type"] == "music.v1.track"
+
+
+def test_new_key_exchange_clears_previous_session_key():
+    first = LanProtocolSession(DeviceIdentity.generate())
+    second = LanProtocolSession(DeviceIdentity.generate())
+    first.peer.device_id = second.identity.device_id
+    first.peer.public_key = second.identity.public_key
+    second.peer.device_id = first.identity.device_id
+    second.peer.public_key = first.identity.public_key
+
+    first_key_exchange = first.business_key_exchange()
+    second_key_exchange = second.business_key_exchange()
+    first.ingest(second_key_exchange)
+    second.ingest(first_key_exchange)
+    first.peer.supported_suites = ["x25519-aes-256-gcm"]
+    second.peer.supported_suites = ["x25519-aes-256-gcm"]
+    first.choose_suite(local_is_initiator=True)
+    second.choose_suite(local_is_initiator=False)
+    first.ensure_session_key()
+    assert first.session_key is not None
+
+    first.business_key_exchange()
+
+    assert first.session_key is None
+    assert first.encryption_counter == 0
