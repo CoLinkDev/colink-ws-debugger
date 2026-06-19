@@ -100,6 +100,7 @@ class SwimManager(QObject):
         self.server: SwimHttpServer | None = None
         self.thread: threading.Thread | None = None
         self.target_url = ""
+        self.running = False
         self.timer = QTimer(self)
         self.timer.setInterval(5_000)
         self.timer.timeout.connect(self.bootstrap_ping)
@@ -110,11 +111,14 @@ class SwimManager(QObject):
 
     def start(self, websocket_url: str) -> None:
         self.target_url = websocket_url
+        self.running = True
         self.ensure_server()
         self.bootstrap_ping()
-        self.timer.start()
+        if not self.timer.isActive():
+            self.timer.start()
 
     def stop(self) -> None:
+        self.running = False
         self.timer.stop()
         if self.server is not None:
             self.server.shutdown()
@@ -140,6 +144,8 @@ class SwimManager(QObject):
 
     @Slot()
     def bootstrap_ping(self) -> None:
+        if not self.running:
+            return
         parsed = urlparse(self.target_url)
         if not parsed.hostname:
             return

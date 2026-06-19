@@ -317,7 +317,7 @@ class LanProtocolSession:
             "auth.v1.reject",
             {
                 "reason": "colink:auth.unknown_device.v1",
-                "message": "No persisted trust record in temporary debugger session",
+                "message": "No trusted peer key for this device",
             },
         )
 

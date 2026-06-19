@@ -35,6 +35,11 @@ from colink_ws_debugger.protocol import (
 )
 from colink_ws_debugger.identity_store import load_or_create_identity, regenerate_identity
 from colink_ws_debugger.swim import SwimManager
+from colink_ws_debugger.trust_store import (
+    load_trust_store,
+    trusted_peer_from_session,
+    upsert_trusted_peer,
+)
 from colink_ws_debugger.ws_client import WebSocketClient
 
 
@@ -72,6 +77,7 @@ class MainWindow(QMainWindow):
         self.session = LanProtocolSession(self.identity)
         self.client = WebSocketClient()
         self.swim = SwimManager(self.identity.device_id)
+        self.trusted_peers = load_trust_store()
         self.records: list[MessageRecord] = []
         self.ws_connected = False
         self.ping_timer = QTimer(self)
@@ -183,11 +189,16 @@ class MainWindow(QMainWindow):
         self.peer_key_edit.setFixedHeight(64)
         self.pairing_code_label = QLabel("-")
         self.phase_label = QLabel("idle")
+        self.trust_label = QLabel("-")
+        self.save_trust_button = QPushButton("Trust Peer")
+        self.save_trust_button.clicked.connect(self.save_current_peer_trust)
         self.peer_id_edit.editingFinished.connect(self.update_peer_from_controls)
         self.peer_key_edit.textChanged.connect(self.update_peer_from_controls)
         form.addRow("Peer ID", self.peer_id_edit)
         form.addRow("Peer Public Key", self.peer_key_edit)
         form.addRow("Pairing Code", self.pairing_code_label)
+        form.addRow("Trust", self.trust_label)
+        form.addRow("", self.save_trust_button)
         form.addRow("Phase", self.phase_label)
         return box
 
@@ -293,6 +304,7 @@ class MainWindow(QMainWindow):
         self.identity = regenerate_identity()
         self.session = LanProtocolSession(self.identity)
         self.swim.replace_identity(self.identity.device_id)
+        self.trusted_peers = load_trust_store()
         self.reset_protocol_state()
         self.refresh_identity()
         self.refresh_state()
@@ -311,6 +323,8 @@ class MainWindow(QMainWindow):
         finally:
             self.updating_peer_controls = False
         self.pairing_code_label.setText(self.session.pairing_code() or "-")
+        trusted = self.trusted_peers.get(peer.device_id)
+        self.trust_label.setText("trusted" if trusted and trusted.public_key == peer.public_key else "-")
         self.refresh_phase_label()
 
     @Slot()
@@ -319,7 +333,17 @@ class MainWindow(QMainWindow):
             return
         self.session.peer.device_id = self.peer_id_edit.text().strip()
         self.session.peer.public_key = self.peer_key_edit.toPlainText().strip()
+        self.apply_trusted_peer_if_available()
         self.refresh_phase_label()
+
+    def apply_trusted_peer_if_available(self) -> None:
+        peer = self.trusted_peers.get(self.session.peer.device_id)
+        if peer is None:
+            return
+        if not self.session.peer.public_key:
+            self.session.peer.public_key = peer.public_key
+        if not self.session.peer.name:
+            self.session.peer.name = peer.name
 
     def refresh_phase_label(self) -> None:
         peer = self.session.peer
@@ -354,12 +378,14 @@ class MainWindow(QMainWindow):
             return
         self.session.reset_connection_state()
         self.reset_protocol_state()
+        self.swim.start(url)
         self.client.connect_url(url)
         self.status_label.setText("Connecting...")
         self.connect_button.setEnabled(False)
 
     @Slot()
     def disconnect_ws(self) -> None:
+        self.swim.stop()
         self.client.disconnect()
 
     @Slot()
@@ -370,13 +396,11 @@ class MainWindow(QMainWindow):
         self.disconnect_button.setEnabled(True)
         if self.auto_ping_check.isChecked():
             self.ping_timer.start()
-        self.swim.start(self.url_edit.text().strip())
 
     @Slot(str)
     def on_disconnected(self, reason: str) -> None:
         self.ws_connected = False
         self.ping_timer.stop()
-        self.swim.stop()
         self.status_label.setText("Disconnected")
         self.connect_button.setEnabled(True)
         self.disconnect_button.setEnabled(False)
@@ -400,6 +424,7 @@ class MainWindow(QMainWindow):
             try:
                 message = json.loads(payload)
                 self.session.ingest(message)
+                self.apply_trusted_peer_if_available()
             except json.JSONDecodeError:
                 pass
         self.add_record("in", kind, payload)
@@ -609,9 +634,11 @@ class MainWindow(QMainWindow):
             return
         if message_type == "pairing.v1.confirm":
             self.send_protocol_message(self.session.pairing_complete())
+            self.save_peer_trust_from_session()
             self.maybe_start_business_flow()
             return
         if message_type == "pairing.v1.complete":
+            self.save_peer_trust_from_session()
             self.maybe_start_business_flow()
             return
         if message_type == "pairing.v1.reject":
@@ -693,6 +720,25 @@ class MainWindow(QMainWindow):
     def finish_flow(self, message: str) -> None:
         self.status_label.setText(message)
         self.active_flow = None
+
+    @Slot()
+    def save_current_peer_trust(self) -> None:
+        if self.save_peer_trust_from_session():
+            self.status_label.setText("Peer trusted.")
+        else:
+            QMessageBox.warning(self, "Missing peer", "Peer device ID or public key is missing.")
+
+    def save_peer_trust_from_session(self) -> bool:
+        peer = trusted_peer_from_session(
+            self.session.peer.device_id,
+            self.session.peer.name,
+            self.session.peer.public_key,
+        )
+        if peer is None:
+            return False
+        self.trusted_peers = upsert_trusted_peer(peer)
+        self.refresh_state()
+        return True
 
     def add_record(self, direction: str, kind: str, payload: Any) -> None:
         summary, raw, parsed = parse_frame(kind, payload, format_json_raw=direction == "in")
